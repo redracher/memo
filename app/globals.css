@@ -2,26 +2,218 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
+@import 'tippy.js/dist/tippy.css';
 
 body {
-  color: var(--foreground);
-  background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
+  color: #1a1a1a;
+  background: #faf9f6;
+}
+
+/* Override browser autofill styles */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0 30px white inset !important;
+  -webkit-text-fill-color: #1a1a1a !important;
 }
 
 @layer utilities {
   .text-balance {
     text-wrap: balance;
   }
+}
+
+/* Tiptap Editor Styles */
+.tiptap-editor .ProseMirror {
+  outline: none;
+}
+
+.tiptap-editor .ProseMirror p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  color: #adb5bd;
+  pointer-events: none;
+  height: 0;
+}
+
+.tiptap-editor .ProseMirror h1 {
+  font-size: 2em;
+  font-weight: bold;
+  margin-top: 1em;
+  margin-bottom: 0.5em;
+}
+
+.tiptap-editor .ProseMirror h2 {
+  font-size: 1.5em;
+  font-weight: bold;
+  margin-top: 0.8em;
+  margin-bottom: 0.4em;
+}
+
+.tiptap-editor .ProseMirror h3 {
+  font-size: 1.25em;
+  font-weight: bold;
+  margin-top: 0.6em;
+  margin-bottom: 0.3em;
+}
+
+.tiptap-editor .ProseMirror ul,
+.tiptap-editor .ProseMirror ol {
+  padding-left: 1.5em;
+  margin: 0.5em 0;
+}
+
+.tiptap-editor .ProseMirror ul li,
+.tiptap-editor .ProseMirror ol li {
+  margin-bottom: 0.1em;
+  line-height: 1.4;
+}
+
+.tiptap-editor .ProseMirror ul li:last-child,
+.tiptap-editor .ProseMirror ol li:last-child {
+  margin-bottom: 0;
+}
+
+.tiptap-editor .ProseMirror code {
+  background-color: #f3f4f6;
+  border-radius: 0.25em;
+  padding: 0.2em 0.4em;
+  font-family: monospace;
+}
+
+.tiptap-editor .ProseMirror pre {
+  background-color: #1e293b;
+  color: #e2e8f0;
+  border-radius: 0.5em;
+  padding: 1em;
+  overflow-x: auto;
+}
+
+.tiptap-editor .ProseMirror pre code {
+  background: none;
+  color: inherit;
+  padding: 0;
+}
+
+.tiptap-editor .ProseMirror blockquote {
+  border-left: 4px solid #10b981;
+  padding-left: 1em;
+  margin-left: 0;
+  font-style: italic;
+  color: #6b7280;
+}
+
+/* Hashtag Pills */
+.tiptap-editor .hashtag-pill {
+  display: inline-block;
+  background-color: #e5e7eb;
+  color: #7c3aed;
+  padding: 0.125rem 0.5rem;
+  border-radius: 9999px;
+  font-size: 0.8em;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background-color 0.2s ease;
+}
+
+.tiptap-editor .hashtag-pill:hover {
+  background-color: #d1d5db;
+}
+
+/* Wiki Links [[Note Name]] */
+.tiptap-editor .wiki-link {
+  cursor: text;
+}
+
+.tiptap-editor .wiki-link-text {
+  color: #fb923c;
+  text-decoration: underline;
+  font-weight: 500;
+  transition: color 0.2s ease;
+  cursor: pointer;
+}
+
+.tiptap-editor .wiki-link-text:hover {
+  color: #f97316;
+}
+
+/* Hide the [[ and ]] brackets by default */
+.tiptap-editor .wiki-link-bracket {
+  font-size: 0;
+  width: 0;
+  display: inline;
+  overflow: hidden;
+  cursor: text;
+}
+
+/* Show brackets only when cursor is in this specific link */
+.tiptap-editor .wiki-link-bracket-active {
+  font-size: inherit;
+  width: auto;
+}
+
+/* AI Generated Content Highlight */
+.ai-generated-text {
+  color: #a78bfa !important;
+}
+
+.ai-generated-text * {
+  color: #a78bfa !important;
+}
+
+/* Fade out after being applied */
+.ai-generated-text.fade-out {
+  color: inherit !important;
+  transition: color 30s ease-out;
+}
+
+.ai-generated-text.fade-out * {
+  color: inherit !important;
+  transition: color 30s ease-out;
+}
+
+/* Purple sparkle in editor */
+.tiptap-editor .ProseMirror:contains("✦") {
+  font-weight: 500;
+}
+
+/* Note Mentions @ and + */
+.tiptap-editor .note-mention-text {
+  cursor: pointer;
+  font-weight: 500;
+  transition: opacity 0.2s ease;
+}
+
+.tiptap-editor .note-mention-text:hover {
+  opacity: 0.7;
+}
+
+.tiptap-editor .note-mention-at {
+  color: #3b82f6;
+  text-decoration: underline;
+}
+
+.tiptap-editor .note-mention-plus {
+  color: #10b981;
+  text-decoration: underline;
+}
+
+.tiptap-editor .note-mention-wiki {
+  color: #fb923c;
+  text-decoration: underline;
+}
+
+/* Clean bubble menu styling */
+.tippy-box {
+  background: transparent !important;
+}
+
+.tippy-content {
+  padding: 0 !important;
+  background: transparent !important;
+}
+
+.tippy-arrow {
+  display: none !important;
 }
