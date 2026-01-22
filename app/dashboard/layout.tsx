@@ -1135,7 +1135,7 @@ export default function DashboardLayout({
             </div>
             <button
               onClick={createNewNote}
-              className="flex-shrink-0 p-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:border-accent/40 hover:bg-accent/5 transition-colors"
+              className="flex-shrink-0 p-2 bg-[#8b7964] border border-[#8b7964] text-white rounded-lg hover:bg-[#6f624f] transition-colors"
               title="New Note"
             >
               <PenLine className="w-4 h-4" />
@@ -1259,15 +1259,21 @@ export default function DashboardLayout({
                                   if (e.key === 'Enter') setEditingSection(null)
                                 }}
                                 autoFocus
-                                className="text-xs font-semibold text-gray-600 tracking-wide bg-transparent border-none focus:outline-none focus:ring-1 focus:ring-stone-400 rounded px-1"
+                                onFocus={(e) => {
+                                  // Move cursor to end
+                                  const input = e.target
+                                  input.setSelectionRange(input.value.length, input.value.length)
+                                }}
+                                style={{ minWidth: '50px', width: `${sectionData.section.name.length * 7}px`, maxWidth: '200px' }}
+                                className="text-xs font-semibold text-gray-600 tracking-wide bg-transparent border-none focus:outline-none focus:ring-0 px-0 flex-shrink-0"
                               />
                             ) : (
                               <span
-                                onDoubleClick={(e) => {
+                                onClick={(e) => {
                                   e.stopPropagation()
                                   setEditingSection(sectionData.section.id)
                                 }}
-                                className="text-xs font-semibold text-gray-600 tracking-wide group-hover:text-accent transition-colors whitespace-nowrap"
+                                className="text-xs font-semibold text-gray-600 tracking-wide whitespace-nowrap cursor-text"
                               >
                                 {sectionData.section.name}
                               </span>

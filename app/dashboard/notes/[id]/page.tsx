@@ -86,6 +86,13 @@ export default function NotePage({ params }: PageProps) {
       setContent(note.content)
       // Show subtitle input if subtitle exists
       setShowSubtitleInput(!!note.subtitle)
+
+      // Focus title if it's empty (new note)
+      if (!note.title || note.title === '') {
+        setTimeout(() => {
+          titleRef.current?.focus()
+        }, 0)
+      }
     }
   }, [noteId, note])
 
