@@ -377,6 +377,13 @@ export default function NotePage({ params }: PageProps) {
       updatedPositions = [...positions, position]
     }
 
+    // Clear the price cache to force refetch with new position data
+    const today = new Date().toISOString().split('T')[0]
+    const cacheKey = `stockPrices_${noteId}_${today}`
+    if (typeof window !== 'undefined') {
+      sessionStorage.removeItem(cacheKey)
+    }
+
     setPositions(updatedPositions)
     setShowPositionForm(false)
     setEditingPosition(null)
@@ -408,6 +415,14 @@ export default function NotePage({ params }: PageProps) {
 
   const handleDeletePosition = async (positionId: string) => {
     const updatedPositions = positions.filter(p => p.id !== positionId)
+
+    // Clear the price cache to force refetch
+    const today = new Date().toISOString().split('T')[0]
+    const cacheKey = `stockPrices_${noteId}_${today}`
+    if (typeof window !== 'undefined') {
+      sessionStorage.removeItem(cacheKey)
+    }
+
     setPositions(updatedPositions)
     await saveNote(title, subtitle, content, updatedPositions)
   }
