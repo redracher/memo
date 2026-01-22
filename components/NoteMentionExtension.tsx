@@ -112,6 +112,8 @@ export const NoteMention = Node.create<NoteMentionOptions>({
   name: 'noteMention',
 
   addOptions() {
+    const extension = this
+
     return {
       HTMLAttributes: {},
       onLinkClick: undefined,
@@ -160,6 +162,14 @@ export const NoteMention = Node.create<NoteMentionOptions>({
               },
             ])
             .run()
+
+          // If this is a new note being created (id === 'new'), trigger navigation
+          if (props.id === 'new' && extension.options.onLinkClick && typedText) {
+            // Small delay to let the text insertion complete
+            setTimeout(() => {
+              extension.options.onLinkClick!(typedText)
+            }, 100)
+          }
         },
         render: () => {
           let component: any

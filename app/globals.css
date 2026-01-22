@@ -106,7 +106,6 @@ input:-webkit-autofill:active {
 
 /* Hashtag Pills */
 .tiptap-editor .hashtag-pill {
-  display: inline-block;
   background-color: #e5e7eb;
   color: #7c3aed;
   padding: 0.125rem 0.5rem;
@@ -115,6 +114,8 @@ input:-webkit-autofill:active {
   font-weight: 500;
   white-space: nowrap;
   transition: background-color 0.2s ease;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
 }
 
 .tiptap-editor .hashtag-pill:hover {

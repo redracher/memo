@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useState, useMemo, useRef } from 'react'
+import { useEffect, useState, useMemo, useRef, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import { useRouter, usePathname } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { Note } from '@/lib/types'
@@ -18,12 +19,14 @@ export default function DashboardLayout({
   const [notes, setNotes] = useState<Note[]>([])
   const [loading, setLoading] = useState(true)
   const [userEmail, setUserEmail] = useState('')
+  const [userInitials, setUserInitials] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedTags, setSelectedTags] = useState<string[]>([])
   const [isSearchFocused, setIsSearchFocused] = useState(false)
   const [sidebarWidth, setSidebarWidth] = useState(280)
   const [isResizing, setIsResizing] = useState(false)
   const [contextMenu, setContextMenu] = useState<{ noteId: string; x: number; y: number } | null>(null)
+  const [showSectionSubmenu, setShowSectionSubmenu] = useState(false)
   const [editingSubtitle, setEditingSubtitle] = useState<{ noteId: string; subtitle: string } | null>(null)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null)
   const [isTagsExpanded, setIsTagsExpanded] = useState(() => {
@@ -40,6 +43,7 @@ export default function DashboardLayout({
   const [dropIndicator, setDropIndicator] = useState<{ noteId: string; position: 'before' | 'after' } | null>(null)
   const [sectionDropIndicator, setSectionDropIndicator] = useState<{ sectionId: string; position: 'before' | 'after' } | null>(null)
   const [sectionMenuOpen, setSectionMenuOpen] = useState<string | null>(null)
+  const [sectionMenuPosition, setSectionMenuPosition] = useState<{ x: number; y: number } | null>(null)
   const [hoveredSection, setHoveredSection] = useState<string | null>(null)
   const [isEditingTitle, setIsEditingTitle] = useState(false)
   const [journalTitle, setJournalTitle] = useState('')
@@ -107,13 +111,13 @@ export default function DashboardLayout({
 
         uniqueSections.set(note.section_id, {
           id: note.section_id,
-          name: savedName || 'New Section',
+          name: savedName || 'New section',
           order: order
         })
 
         // Save name and order to refs for persistence
         if (savedName === undefined) {
-          sectionNamesRef.current.set(note.section_id, 'New Section')
+          sectionNamesRef.current.set(note.section_id, 'New section')
         }
         if (savedOrder === undefined) {
           sectionOrderRef.current.set(note.section_id, order)
@@ -173,12 +177,28 @@ export default function DashboardLayout({
   useEffect(() => {
     const handleClick = () => {
       setContextMenu(null)
+      setShowSectionSubmenu(false)
       setSectionMenuOpen(null)
+      setSectionMenuPosition(null)
     }
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setContextMenu(null)
+        setShowSectionSubmenu(false)
+        setSectionMenuOpen(null)
+        setSectionMenuPosition(null)
+      }
+    }
+
     if (contextMenu || sectionMenuOpen) {
       document.addEventListener('click', handleClick)
+      document.addEventListener('keydown', handleKeyDown)
     }
-    return () => document.removeEventListener('click', handleClick)
+    return () => {
+      document.removeEventListener('click', handleClick)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
   }, [contextMenu, sectionMenuOpen])
 
   useEffect(() => {
@@ -218,6 +238,24 @@ export default function DashboardLayout({
     }
 
     setUserEmail(user.email || '')
+
+    // Try to get user's name from metadata
+    const fullName = user.user_metadata?.full_name || user.user_metadata?.name || ''
+
+    if (fullName) {
+      // Extract initials from full name
+      const nameParts = fullName.trim().split(/\s+/)
+      if (nameParts.length >= 2) {
+        // First and last name
+        const firstInitial = nameParts[0][0]?.toUpperCase() || ''
+        const lastInitial = nameParts[nameParts.length - 1][0]?.toUpperCase() || ''
+        setUserInitials(firstInitial + lastInitial)
+      } else if (nameParts.length === 1) {
+        // Single name - use first two letters or just first letter
+        const name = nameParts[0]
+        setUserInitials(name.substring(0, 2).toUpperCase())
+      }
+    }
   }
 
   const fetchNotes = async () => {
@@ -366,6 +404,37 @@ export default function DashboardLayout({
     setContextMenu({ noteId, x: e.clientX, y: e.clientY })
   }
 
+  const moveNoteToSection = async (noteId: string, targetSectionId: string) => {
+    const note = notes.find(n => n.id === noteId)
+    if (!note) return
+
+    // Get all notes in the target section and find max position
+    const sectionNotes = notes.filter(n => n.section_id === targetSectionId)
+    let maxPosition = -1
+    sectionNotes.forEach(n => {
+      const pos = notePositionsRef.current.get(n.id)
+      if (pos !== undefined && pos > maxPosition) {
+        maxPosition = pos
+      }
+    })
+
+    // Set position at bottom of target section
+    notePositionsRef.current.set(noteId, maxPosition + 1)
+    saveSectionDataToLocalStorage()
+
+    // Optimistically update UI
+    const updatedNotes = notes.map(n =>
+      n.id === noteId ? { ...n, section_id: targetSectionId } : n
+    )
+    setNotes(updatedNotes)
+
+    // Update database
+    await supabase
+      .from('notes')
+      .update({ section_id: targetSectionId })
+      .eq('id', noteId)
+  }
+
   const addNoteToNewSection = async (noteId: string) => {
     let updatedSections = [...sections]
 
@@ -393,10 +462,21 @@ export default function DashboardLayout({
       }
     }
 
+    // Find the highest "New section N" number
+    let maxNum = 0
+    updatedSections.forEach(s => {
+      const match = s.name.match(/^New section (\d+)$/i)
+      if (match) {
+        maxNum = Math.max(maxNum, parseInt(match[1]))
+      } else if (s.name.toLowerCase() === 'new section') {
+        maxNum = Math.max(maxNum, 1)
+      }
+    })
+
     // Create the new section for the clicked note
     const newSectionId = crypto.randomUUID()
     const newOrder = updatedSections.length
-    const newSectionName = 'New Section'
+    const newSectionName = maxNum === 0 ? 'New section' : `New section ${maxNum + 1}`
 
     const newSection = {
       id: newSectionId,
@@ -435,9 +515,41 @@ export default function DashboardLayout({
     // Get notes from the deleted section
     const notesInSection = notes.filter(n => n.section_id === sectionId)
 
-    // Find or create "Other" section
-    let otherSection = sections.find(s => s.name === 'Other')
     const remainingSections = sections.filter(s => s.id !== sectionId)
+
+    // If this is the last section, just remove section_id from all notes
+    if (remainingSections.length === 0) {
+      // Remove from refs
+      sectionNamesRef.current.delete(sectionId)
+      sectionOrderRef.current.delete(sectionId)
+      saveSectionDataToLocalStorage()
+
+      // Update sections to empty
+      setSections([])
+
+      // Optimistically update notes state - remove section_id
+      const updatedNotes = notes.map(note => {
+        if (note.section_id === sectionId) {
+          const { section_id, ...rest } = note
+          return rest as Note
+        }
+        return note
+      })
+      setNotes(updatedNotes)
+
+      // Update database in background
+      for (const note of notesInSection) {
+        await supabase
+          .from('notes')
+          .update({ section_id: null })
+          .eq('id', note.id)
+      }
+
+      return
+    }
+
+    // Find or create "Other" section
+    let otherSection = sections.find(s => s.name === 'Other' && s.id !== sectionId)
 
     if (!otherSection) {
       // Create "Other" section
@@ -914,6 +1026,56 @@ export default function DashboardLayout({
     )
   }
 
+  // Keyboard navigation
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Navigation with arrow keys
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+        // Don't interfere if user is typing in an input
+        const target = e.target as HTMLElement
+        if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
+          return
+        }
+
+        e.preventDefault()
+
+        // Get all notes in order (flattened from organizedNotes)
+        const allNotes: Note[] = []
+        organizedNotes.forEach(item => {
+          if (item.type === 'note') {
+            allNotes.push(item.data as Note)
+          } else {
+            const sectionData = item.data as { section: typeof sections[0]; notes: Note[] }
+            allNotes.push(...sectionData.notes)
+          }
+        })
+
+        if (allNotes.length === 0) return
+
+        const currentIndex = allNotes.findIndex(n => n.id === currentNoteId)
+
+        let nextIndex = currentIndex
+        if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
+          // Navigate to previous note
+          nextIndex = currentIndex > 0 ? currentIndex - 1 : 0
+        } else if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
+          // Navigate to next note
+          nextIndex = currentIndex < allNotes.length - 1 ? currentIndex + 1 : allNotes.length - 1
+        }
+
+        if (nextIndex !== currentIndex || currentIndex === -1) {
+          const nextNote = allNotes[nextIndex >= 0 ? nextIndex : 0]
+          router.push(`/dashboard/notes/${nextNote.id}`)
+        }
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [organizedNotes, currentNoteId, router])
+
   return (
     <NotesContext.Provider value={{ notes, refreshNotes: fetchNotes, getNote, updateNoteOptimistically, createNoteAfter }}>
       <div className="flex h-screen bg-background">
@@ -942,7 +1104,7 @@ export default function DashboardLayout({
                       }
                     }}
                     autoFocus
-                    maxLength={80}
+                    maxLength={25}
                     className="text-xl text-text bg-transparent border-none focus:outline-none p-0 m-0 w-full resize-none"
                   />
                 ) : (
@@ -1037,7 +1199,7 @@ export default function DashboardLayout({
                           }}
                           onClick={() => router.push(`/dashboard/notes/${note.id}`)}
                           onContextMenu={(e) => handleContextMenu(e, note.id)}
-                          className={`w-full text-left px-3 py-2 rounded-lg hover:bg-white/50 transition-colors ${
+                          className={`w-full text-left px-3 py-2 rounded-lg hover:bg-white/50 transition-colors focus:outline-none ${
                             note.id === currentNoteId ? 'bg-white/70' : ''
                           } ${draggedNote === note.id ? 'opacity-30' : ''}`}
                           style={{ cursor: draggedNote ? 'grabbing' : 'grab' }}
@@ -1099,7 +1261,7 @@ export default function DashboardLayout({
                                   if (e.key === 'Enter') setEditingSection(null)
                                 }}
                                 autoFocus
-                                className="text-xs font-semibold text-gray-600 uppercase tracking-wide bg-transparent border-none focus:outline-none focus:ring-1 focus:ring-stone-400 rounded px-1"
+                                className="text-xs font-semibold text-gray-600 tracking-wide bg-transparent border-none focus:outline-none focus:ring-1 focus:ring-stone-400 rounded px-1"
                               />
                             ) : (
                               <span
@@ -1107,7 +1269,7 @@ export default function DashboardLayout({
                                   e.stopPropagation()
                                   setEditingSection(sectionData.section.id)
                                 }}
-                                className="text-xs font-semibold text-gray-600 uppercase tracking-wide group-hover:text-accent transition-colors whitespace-nowrap"
+                                className="text-xs font-semibold text-gray-600 tracking-wide group-hover:text-accent transition-colors whitespace-nowrap"
                               >
                                 {sectionData.section.name}
                               </span>
@@ -1115,74 +1277,25 @@ export default function DashboardLayout({
                             <div className="flex-1 h-px bg-stone-400"></div>
 
                             {/* Section menu button */}
-                            <div className="relative">
+                            <div className="relative" style={{ overflow: 'visible' }}>
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation()
                                   setContextMenu(null)
-                                  setSectionMenuOpen(sectionMenuOpen === sectionData.section.id ? null : sectionData.section.id)
+                                  if (sectionMenuOpen === sectionData.section.id) {
+                                    setSectionMenuOpen(null)
+                                    setSectionMenuPosition(null)
+                                  } else {
+                                    const rect = e.currentTarget.getBoundingClientRect()
+                                    setSectionMenuOpen(sectionData.section.id)
+                                    setSectionMenuPosition({ x: rect.right, y: rect.bottom + 4 })
+                                  }
                                 }}
                                 className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-stone-200 rounded"
                                 title="Section options"
                               >
                                 <MoreVertical className="w-3 h-3 text-gray-500" />
                               </button>
-
-                              {/* Dropdown menu */}
-                              {sectionMenuOpen === sectionData.section.id && (
-                                <div
-                                  className="absolute right-0 top-full mt-1 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50 min-w-[140px]"
-                                  onClick={(e) => e.stopPropagation()}
-                                >
-                                  {(() => {
-                                    const sortedSections = [...sections].sort((a, b) => a.order - b.order)
-                                    const currentIndex = sortedSections.findIndex(s => s.id === sectionData.section.id)
-                                    const isFirst = currentIndex === 0
-                                    const isLast = currentIndex === sortedSections.length - 1
-
-                                    return (
-                                      <>
-                                        {!isFirst && (
-                                          <button
-                                            onClick={() => {
-                                              moveSectionUp(sectionData.section.id)
-                                              setSectionMenuOpen(null)
-                                            }}
-                                            className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors flex items-center gap-2"
-                                          >
-                                            <MoveUp className="w-3 h-3" />
-                                            Move up
-                                          </button>
-                                        )}
-                                        {!isLast && (
-                                          <button
-                                            onClick={() => {
-                                              moveSectionDown(sectionData.section.id)
-                                              setSectionMenuOpen(null)
-                                            }}
-                                            className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors flex items-center gap-2"
-                                          >
-                                            <MoveDown className="w-3 h-3" />
-                                            Move down
-                                          </button>
-                                        )}
-                                        {sectionData.section.name !== 'Other' && (
-                                          <button
-                                            onClick={() => {
-                                              deleteSection(sectionData.section.id)
-                                              setSectionMenuOpen(null)
-                                            }}
-                                            className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors flex items-center gap-2"
-                                          >
-                                            <Trash2 className="w-3 h-3" />
-                                            Delete
-                                          </button>
-                                        )}
-                                      </>
-                                    )
-                                  })()}
-                                </div>
-                              )}
                             </div>
                           </div>
                         </div>
@@ -1235,7 +1348,7 @@ export default function DashboardLayout({
                                 }}
                                 onClick={() => router.push(`/dashboard/notes/${note.id}`)}
                                 onContextMenu={(e) => handleContextMenu(e, note.id)}
-                                className={`w-full text-left px-3 py-2 rounded-lg hover:bg-white/50 transition-colors ${
+                                className={`w-full text-left px-3 py-2 rounded-lg hover:bg-white/50 transition-colors focus:outline-none ${
                                   note.id === currentNoteId ? 'bg-white/70' : ''
                                 } ${draggedNote === note.id ? 'opacity-30' : ''}`}
                                 style={{ cursor: draggedNote ? 'grabbing' : 'grab' }}
@@ -1272,12 +1385,12 @@ export default function DashboardLayout({
             <div className="px-4 pb-0 border-t border-gray-200 pt-4">
               <button
                 onClick={() => setIsTagsExpanded(!isTagsExpanded)}
-                className="w-full flex items-center justify-between text-xs font-medium text-gray-500 mb-3 uppercase tracking-wide hover:text-gray-700 transition-colors"
+                className="w-full flex items-center justify-between text-xs font-semibold text-gray-600 mb-3 tracking-wide hover:text-gray-700 transition-colors"
               >
                 <div className="flex items-center gap-2">
                   <span>Tags</span>
                   {!isTagsExpanded && selectedTags.length > 0 && (
-                    <span className="text-xs font-normal text-gray-400 normal-case">
+                    <span className="text-xs font-normal text-gray-400">
                       {selectedTags.length} filter{selectedTags.length > 1 ? 's' : ''} applied
                     </span>
                   )}
@@ -1329,7 +1442,9 @@ export default function DashboardLayout({
           <div className="p-4 border-t border-gray-200">
             <div className="flex items-center justify-between">
               <div className="flex-1 min-w-0">
-                <div className="text-sm text-text truncate">{userEmail}</div>
+                <div className="text-sm text-text truncate">
+                  {userInitials || userEmail}
+                </div>
               </div>
               <button
                 onClick={handleLogout}
@@ -1371,6 +1486,70 @@ export default function DashboardLayout({
           {children}
         </main>
 
+        {/* Section Menu Dropdown */}
+        {sectionMenuOpen && sectionMenuPosition && (
+          <div
+            className="fixed bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50 min-w-[140px]"
+            style={{
+              right: `${window.innerWidth - sectionMenuPosition.x}px`,
+              top: `${sectionMenuPosition.y}px`,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {(() => {
+              const section = sections.find(s => s.id === sectionMenuOpen)
+              if (!section) return null
+
+              const sortedSections = [...sections].sort((a, b) => a.order - b.order)
+              const currentIndex = sortedSections.findIndex(s => s.id === sectionMenuOpen)
+              const isFirst = currentIndex === 0
+              const isLast = currentIndex === sortedSections.length - 1
+
+              return (
+                <>
+                  {!isFirst && (
+                    <button
+                      onClick={() => {
+                        moveSectionUp(sectionMenuOpen)
+                        setSectionMenuOpen(null)
+                        setSectionMenuPosition(null)
+                      }}
+                      className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors flex items-center gap-2"
+                    >
+                      <MoveUp className="w-3 h-3" />
+                      Move up
+                    </button>
+                  )}
+                  {!isLast && (
+                    <button
+                      onClick={() => {
+                        moveSectionDown(sectionMenuOpen)
+                        setSectionMenuOpen(null)
+                        setSectionMenuPosition(null)
+                      }}
+                      className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors flex items-center gap-2"
+                    >
+                      <MoveDown className="w-3 h-3" />
+                      Move down
+                    </button>
+                  )}
+                  <button
+                    onClick={() => {
+                      deleteSection(sectionMenuOpen)
+                      setSectionMenuOpen(null)
+                      setSectionMenuPosition(null)
+                    }}
+                    className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors flex items-center gap-2"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                    Delete
+                  </button>
+                </>
+              )
+            })()}
+          </div>
+        )}
+
         {/* Context Menu */}
         {contextMenu && (
           <div
@@ -1378,16 +1557,54 @@ export default function DashboardLayout({
             style={{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }}
             onClick={(e) => e.stopPropagation()}
           >
-            <button
-              onClick={() => {
-                addNoteToNewSection(contextMenu.noteId)
-                setContextMenu(null)
-              }}
-              className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors flex items-center gap-2"
+            <div
+              className="relative"
+              onMouseEnter={() => setShowSectionSubmenu(true)}
+              onMouseLeave={() => setShowSectionSubmenu(false)}
             >
-              <FolderPlus className="w-3 h-3" />
-              Add to section
-            </button>
+              <button
+                className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors flex items-center gap-2"
+              >
+                <FolderPlus className="w-3 h-3" />
+                Add to section
+                <ChevronRight className="w-3 h-3 ml-auto" />
+              </button>
+
+              {/* Submenu */}
+              {showSectionSubmenu && (
+                <div
+                  className="absolute left-full top-0 ml-1 bg-white rounded-lg shadow-lg border border-gray-200 py-1 min-w-[160px]"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {[...sections].sort((a, b) => a.order - b.order).map((section) => (
+                    <button
+                      key={section.id}
+                      onClick={() => {
+                        moveNoteToSection(contextMenu.noteId, section.id)
+                        setContextMenu(null)
+                        setShowSectionSubmenu(false)
+                      }}
+                      className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                    >
+                      {section.name}
+                    </button>
+                  ))}
+                  {sections.length > 0 && (
+                    <div className="h-px bg-gray-200 my-1" />
+                  )}
+                  <button
+                    onClick={() => {
+                      addNoteToNewSection(contextMenu.noteId)
+                      setContextMenu(null)
+                      setShowSectionSubmenu(false)
+                    }}
+                    className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                  >
+                    Add new
+                  </button>
+                </div>
+              )}
+            </div>
             <button
               onClick={() => {
                 setShowDeleteConfirm(contextMenu.noteId)

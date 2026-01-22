@@ -5,8 +5,7 @@ import StarterKit from '@tiptap/starter-kit'
 import Placeholder from '@tiptap/extension-placeholder'
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Hashtag, HashtagSuggestionList } from './HashtagExtension'
-import { getAllTags } from '@/lib/extractTags'
+import { Hashtag } from './HashtagExtension'
 import { ReactRenderer } from '@tiptap/react'
 import tippy from 'tippy.js'
 import { WikiLink } from './WikiLinkExtension'
@@ -27,9 +26,6 @@ export default function TiptapEditor({ initialContent, onUpdate, editorRef, note
   const router = useRouter()
   const { notes, refreshNotes } = useNotes()
   const [isExpanding, setIsExpanding] = useState(false)
-
-  // Get all existing tags from notes (strip the # symbol)
-  const existingTags = Array.from(getAllTags(notes).keys()).map(tag => tag.replace('#', ''))
 
   const handleWikiLinkClick = async (linkText: string) => {
     // Search for existing note with this title
@@ -88,15 +84,7 @@ export default function TiptapEditor({ initialContent, onUpdate, editorRef, note
       Placeholder.configure({
         placeholder: 'Start writing',
       }),
-      Hashtag.configure({
-        suggestion: {
-          items: ({ query }: { query: string }) => {
-            return existingTags
-              .filter(tag => tag.toLowerCase().includes(query.toLowerCase()))
-              .slice(0, 5)
-          },
-        },
-      }),
+      Hashtag,
       WikiLink.configure({
         onLinkClick: handleWikiLinkClick,
       }),
@@ -107,10 +95,17 @@ export default function TiptapEditor({ initialContent, onUpdate, editorRef, note
           char: '@',
           pluginKey: new PluginKey('atMentionSuggestion'),
           items: ({ query }: { query: string }) => {
-            return notes
+            const matchingNotes = notes
               .filter(note => note.title.toLowerCase().includes(query.toLowerCase()))
               .slice(0, 5)
               .map(note => ({ id: note.id, title: note.title, query }))
+
+            // Always include the query as an option to create new note
+            if (query && !matchingNotes.some(note => note.title.toLowerCase() === query.toLowerCase())) {
+              return [{ id: 'new', title: query, query }, ...matchingNotes]
+            }
+
+            return matchingNotes.length > 0 ? matchingNotes : (query ? [{ id: 'new', title: query, query }] : [])
           },
         },
       }),
@@ -121,10 +116,17 @@ export default function TiptapEditor({ initialContent, onUpdate, editorRef, note
           char: '+',
           pluginKey: new PluginKey('plusMentionSuggestion'),
           items: ({ query }: { query: string }) => {
-            return notes
+            const matchingNotes = notes
               .filter(note => note.title.toLowerCase().includes(query.toLowerCase()))
               .slice(0, 5)
               .map(note => ({ id: note.id, title: note.title, query }))
+
+            // Always include the query as an option to create new note
+            if (query && !matchingNotes.some(note => note.title.toLowerCase() === query.toLowerCase())) {
+              return [{ id: 'new', title: query, query }, ...matchingNotes]
+            }
+
+            return matchingNotes.length > 0 ? matchingNotes : (query ? [{ id: 'new', title: query, query }] : [])
           },
         },
       }),
