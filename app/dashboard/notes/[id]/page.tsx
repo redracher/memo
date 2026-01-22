@@ -4,11 +4,14 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import TiptapEditor from '@/components/TiptapEditor'
-import { Check, Trash2, MoreVertical, Star } from 'lucide-react'
+import { Check, Trash2, MoreVertical, Star, TrendingUp, X } from 'lucide-react'
 import { useNotes } from '@/lib/NotesContext'
 import { findBacklinks, findForwardLinks } from '@/lib/findBacklinks'
 import AIPressureTestPanel from '@/components/AIPressureTestPanel'
 import AssessmentModal from '@/components/AssessmentModal'
+import PositionsSummary from '@/components/PositionsSummary'
+import PositionForm from '@/components/PositionForm'
+import { Position, PositionWithPrices } from '@/lib/positions'
 
 interface PageProps {
   params: {
@@ -35,6 +38,27 @@ export default function NotePage({ params }: PageProps) {
   const editorRef = useRef<any>(null)
   const titleRef = useRef<HTMLInputElement>(null)
   const subtitleRef = useRef<HTMLInputElement>(null)
+
+  // Position tracking state
+  const [positions, setPositions] = useState<Position[]>([])
+  const [positionsWithPrices, setPositionsWithPrices] = useState<PositionWithPrices[]>([])
+  const [showPositionForm, setShowPositionForm] = useState(false)
+  const [editingPosition, setEditingPosition] = useState<Position | null>(null)
+  const [loadingPrices, setLoadingPrices] = useState(false)
+  const [isPositionsExpanded, setIsPositionsExpanded] = useState(false)
+  const [hideTrackPositionsPrompt, setHideTrackPositionsPrompt] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem(`hideTrackPositions_${params.id}`) === 'true'
+    }
+    return false
+  })
+  const [showPositionsInHeader, setShowPositionsInHeader] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const stored = localStorage.getItem(`showPositionsInHeader_${params.id}`)
+      return stored === null ? true : stored === 'true'
+    }
+    return true
+  })
 
   // Load note from context (instant, no fetch needed)
   const note = getNote(noteId)
@@ -84,6 +108,7 @@ export default function NotePage({ params }: PageProps) {
       setTitle(note.title)
       setSubtitle(note.subtitle || '')
       setContent(note.content)
+      setPositions(note.positions || [])
       // Show subtitle input if subtitle exists
       setShowSubtitleInput(!!note.subtitle)
 
@@ -96,24 +121,120 @@ export default function NotePage({ params }: PageProps) {
     }
   }, [noteId, note])
 
-  const saveNote = async (newTitle: string, newSubtitle: string, newContent: any) => {
+  // Fetch stock prices when positions change
+  useEffect(() => {
+    const fetchStockPrices = async () => {
+      if (positions.length === 0) {
+        setPositionsWithPrices([])
+        return
+      }
+
+      // Check if we have cached prices from today
+      const today = new Date().toISOString().split('T')[0]
+      const cacheKey = `stockPrices_${noteId}_${today}`
+
+      if (typeof window !== 'undefined') {
+        const cached = sessionStorage.getItem(cacheKey)
+        if (cached) {
+          try {
+            const cachedData = JSON.parse(cached)
+            // Verify cache matches current positions
+            if (cachedData.positions.length === positions.length &&
+                cachedData.positions.every((p: Position, i: number) =>
+                  p.id === positions[i].id &&
+                  p.ticker === positions[i].ticker &&
+                  p.entryDate === positions[i].entryDate
+                )) {
+              setPositionsWithPrices(cachedData.pricesWithPositions)
+              return
+            }
+          } catch (e) {
+            // Invalid cache, continue to fetch
+          }
+        }
+      }
+
+      setLoadingPrices(true)
+
+      try {
+        // Fetch prices for all positions
+        const pricesPromises = positions.map(async (position) => {
+          // Fetch current price and entry date price for the stock
+          const [currentResponse, entryResponse] = await Promise.all([
+            fetch(`/api/stock-price?ticker=${position.ticker}`),
+            fetch(`/api/stock-price?ticker=${position.ticker}&date=${position.entryDate}`),
+          ])
+
+          const currentData = await currentResponse.json()
+          const entryData = await entryResponse.json()
+
+          // Fetch benchmark prices
+          const [benchmarkCurrentResponse, benchmarkEntryResponse] = await Promise.all([
+            fetch(`/api/stock-price?ticker=${position.benchmarkTicker}`),
+            fetch(`/api/stock-price?ticker=${position.benchmarkTicker}&date=${position.entryDate}`),
+          ])
+
+          const benchmarkCurrentData = await benchmarkCurrentResponse.json()
+          const benchmarkEntryData = await benchmarkEntryResponse.json()
+
+          const positionWithPrices: PositionWithPrices = {
+            ...position,
+            currentPrice: currentData.currentPrice,
+            entryBenchmarkPrice: benchmarkEntryData.historicalPrice || benchmarkEntryData.currentPrice,
+            currentBenchmarkPrice: benchmarkCurrentData.currentPrice,
+          }
+
+          return positionWithPrices
+        })
+
+        const allPositionsWithPrices = await Promise.all(pricesPromises)
+        setPositionsWithPrices(allPositionsWithPrices)
+
+        // Cache the results for today
+        if (typeof window !== 'undefined') {
+          sessionStorage.setItem(cacheKey, JSON.stringify({
+            positions,
+            pricesWithPositions: allPositionsWithPrices
+          }))
+        }
+      } catch (error) {
+        console.error('Error fetching stock prices:', error)
+      } finally {
+        setLoadingPrices(false)
+      }
+    }
+
+    fetchStockPrices()
+  }, [positions, noteId])
+
+  const saveNote = async (newTitle: string, newSubtitle: string, newContent: any, newPositions?: Position[]) => {
     try {
       setSaving(true)
 
       // Optimistically update the note in context immediately
-      updateNoteOptimistically(noteId, {
+      const updateData: any = {
         title: newTitle,
         subtitle: newSubtitle,
         content: newContent
-      })
+      }
+      if (newPositions !== undefined) {
+        updateData.positions = newPositions
+      }
+
+      updateNoteOptimistically(noteId, updateData)
+
+      const dbUpdateData: any = {
+        title: newTitle,
+        subtitle: newSubtitle,
+        content: newContent
+      }
+      if (newPositions !== undefined) {
+        dbUpdateData.positions = newPositions
+      }
 
       const { error } = await supabase
         .from('notes')
-        .update({
-          title: newTitle,
-          subtitle: newSubtitle,
-          content: newContent
-        })
+        .update(dbUpdateData)
         .eq('id', noteId)
 
       if (error) {
@@ -134,7 +255,7 @@ export default function NotePage({ params }: PageProps) {
     }
   }
 
-  const debouncedSave = useCallback((newTitle: string, newSubtitle: string, newContent: any) => {
+  const debouncedSave = useCallback((newTitle: string, newSubtitle: string, newContent: any, newPositions?: Position[]) => {
     setSaved(false)
 
     if (saveTimeout) {
@@ -142,7 +263,7 @@ export default function NotePage({ params }: PageProps) {
     }
 
     const timeout = setTimeout(() => {
-      saveNote(newTitle, newSubtitle, newContent)
+      saveNote(newTitle, newSubtitle, newContent, newPositions)
     }, 2000)
 
     setSaveTimeout(timeout)
@@ -243,6 +364,69 @@ export default function NotePage({ params }: PageProps) {
     }
   }
 
+  const handleSavePosition = async (position: Position) => {
+    const existingIndex = positions.findIndex(p => p.id === position.id)
+    let updatedPositions: Position[]
+
+    if (existingIndex >= 0) {
+      // Update existing position
+      updatedPositions = [...positions]
+      updatedPositions[existingIndex] = position
+    } else {
+      // Add new position
+      updatedPositions = [...positions, position]
+    }
+
+    setPositions(updatedPositions)
+    setShowPositionForm(false)
+    setEditingPosition(null)
+    // Save immediately with current note data
+    await saveNote(title, subtitle, content, updatedPositions)
+  }
+
+  const handleAddPosition = () => {
+    const newPosition: Position = {
+      id: crypto.randomUUID(),
+      ticker: '',
+      entryDate: new Date().toISOString().split('T')[0],
+      entryPrice: 0,
+      shares: 0,
+      benchmarkTicker: 'SPY',
+      status: 'Open',
+      exitDate: null,
+      exitPrice: null,
+    }
+    setEditingPosition(newPosition)
+    setShowPositionForm(true)
+  }
+
+  const handleEditPosition = (position: Position) => {
+    setEditingPosition(position)
+    setShowPositionForm(true)
+    setIsPositionsExpanded(false)
+  }
+
+  const handleDeletePosition = async (positionId: string) => {
+    const updatedPositions = positions.filter(p => p.id !== positionId)
+    setPositions(updatedPositions)
+    await saveNote(title, subtitle, content, updatedPositions)
+  }
+
+  const handleDismissTrackPositions = () => {
+    setHideTrackPositionsPrompt(true)
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(`hideTrackPositions_${noteId}`, 'true')
+    }
+  }
+
+  const handleTogglePositionsInHeader = () => {
+    const newValue = !showPositionsInHeader
+    setShowPositionsInHeader(newValue)
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(`showPositionsInHeader_${noteId}`, String(newValue))
+    }
+  }
+
   const handleAppendToNote = (assessment: string) => {
     // Insert an assessment pill at the end of the note
     if (editorRef.current) {
@@ -324,39 +508,40 @@ export default function NotePage({ params }: PageProps) {
   return (
     <>
       {/* Title Section */}
-      <div className="px-8 py-4 border-b border-gray-200 flex items-start justify-between flex-shrink-0">
-        <div className="flex-1 flex flex-col gap-1">
-          <input
-            ref={titleRef}
-            type="text"
-            value={title}
-            onChange={handleTitleChange}
-            onKeyDown={handleTitleKeyDown}
-            onBlur={handleTitleBlur}
-            className="text-2xl font-semibold text-text border-none outline-none bg-transparent w-full"
-            placeholder="Untitled"
-          />
-          {showSubtitleInput ? (
+      <div className="px-8 py-4 border-b border-gray-200 flex-shrink-0">
+        <div className="flex items-start justify-between">
+          <div className="flex-1 flex flex-col gap-1">
             <input
-              ref={subtitleRef}
+              ref={titleRef}
               type="text"
-              value={subtitle}
-              onChange={handleSubtitleChange}
-              onKeyDown={handleSubtitleKeyDown}
-              onBlur={handleSubtitleBlur}
-              className="text-sm text-gray-500 border-none outline-none bg-transparent w-full"
-              placeholder="Add subtitle..."
+              value={title}
+              onChange={handleTitleChange}
+              onKeyDown={handleTitleKeyDown}
+              onBlur={handleTitleBlur}
+              className="text-2xl font-semibold text-text border-none outline-none bg-transparent w-full"
+              placeholder="Untitled"
             />
-          ) : subtitle ? (
-            <div className="text-sm text-gray-500">{subtitle}</div>
-          ) : (
-            <div
-              onClick={handleShowSubtitle}
-              className="h-5 cursor-text"
-            />
-          )}
-        </div>
-        <div className="flex items-center gap-4 ml-4 flex-shrink-0">
+            {showSubtitleInput ? (
+              <input
+                ref={subtitleRef}
+                type="text"
+                value={subtitle}
+                onChange={handleSubtitleChange}
+                onKeyDown={handleSubtitleKeyDown}
+                onBlur={handleSubtitleBlur}
+                className="text-sm text-gray-500 border-none outline-none bg-transparent w-full"
+                placeholder="Add subtitle"
+              />
+            ) : subtitle ? (
+              <div className="text-sm text-gray-500">{subtitle}</div>
+            ) : (
+              <div
+                onClick={handleShowSubtitle}
+                className="h-5 cursor-text"
+              />
+            )}
+          </div>
+          <div className="flex items-center gap-4 ml-4 flex-shrink-0">
           {saving ? (
             <span className="text-sm text-gray-500">Saving...</span>
           ) : saved ? (
@@ -367,27 +552,6 @@ export default function NotePage({ params }: PageProps) {
           ) : (
             <span className="text-sm text-gray-500">Unsaved</span>
           )}
-          <div className="relative group">
-            <button
-              onClick={() => wordCount >= 100 && setShowPressureTest(true)}
-              className={`px-4 py-2 text-sm rounded-lg transition-colors flex items-center gap-2 ${
-                wordCount < 100
-                  ? 'text-gray-400 cursor-not-allowed'
-                  : 'text-gray-700 hover:bg-accent/5'
-              }`}
-            >
-              <svg className={`w-4 h-4 ${wordCount < 100 ? 'text-purple-300' : 'text-purple-400'}`} viewBox="0 0 24 24" fill="currentColor">
-                <path d="M12 0L14.5 9.5L24 12L14.5 14.5L12 24L9.5 14.5L0 12L9.5 9.5L12 0Z" />
-              </svg>
-              Assess thesis
-            </button>
-            {wordCount < 100 && (
-              <div className="absolute left-1/2 -translate-x-1/2 top-full mt-2 px-3 py-1.5 bg-gray-900 text-white text-xs rounded-md whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
-                Try writing a bit more?
-                <div className="absolute left-1/2 -translate-x-1/2 bottom-full w-0 h-0 border-l-4 border-r-4 border-b-4 border-transparent border-b-gray-900"></div>
-              </div>
-            )}
-          </div>
           <div className="relative flex items-center">
             <button
               onClick={() => setShowMenu(!showMenu)}
@@ -402,7 +566,31 @@ export default function NotePage({ params }: PageProps) {
                   className="fixed inset-0 z-10"
                   onClick={() => setShowMenu(false)}
                 />
-                <div className="absolute left-auto right-0 mt-2 w-40 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-20" style={{ right: 0 }}>
+                <div className="absolute right-0 top-full mt-1 w-48 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-20">
+                  <button
+                    className="w-full flex items-center gap-2 px-4 py-2 text-sm text-gray-400 cursor-not-allowed transition-colors"
+                    disabled
+                    title="Coming soon"
+                  >
+                    <svg className="w-4 h-4 text-gray-400" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M12 0L14.5 9.5L24 12L14.5 14.5L12 24L9.5 14.5L0 12L9.5 9.5L12 0Z" />
+                    </svg>
+                    <span>Assess thesis</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowMenu(false)
+                      if (positions.length > 0) {
+                        setIsPositionsExpanded(true)
+                      } else {
+                        handleAddPosition()
+                      }
+                    }}
+                    className="w-full flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                  >
+                    <TrendingUp className="w-4 h-4" />
+                    <span>{positions.length > 0 ? 'Manage positions' : 'Add position'}</span>
+                  </button>
                   <button
                     onClick={() => {
                       setShowMenu(false)
@@ -418,6 +606,47 @@ export default function NotePage({ params }: PageProps) {
             )}
           </div>
         </div>
+        </div>
+
+        {/* Compact Positions Summary - Inline at top */}
+        {positions.length > 0 && (
+          <PositionsSummary
+            positions={positions}
+            positionsWithPrices={positionsWithPrices}
+            isExpanded={isPositionsExpanded}
+            onToggleExpanded={() => setIsPositionsExpanded(!isPositionsExpanded)}
+            onAddClick={() => {
+              setIsPositionsExpanded(false)
+              handleAddPosition()
+            }}
+            onEditPosition={handleEditPosition}
+            onDeletePosition={handleDeletePosition}
+            loadingPrices={loadingPrices}
+            showInHeader={showPositionsInHeader}
+            onToggleShowInHeader={handleTogglePositionsInHeader}
+          />
+        )}
+
+        {/* Track Positions Prompt */}
+        {positions.length === 0 && !hideTrackPositionsPrompt && (
+          <div className="mt-3 flex justify-start">
+            <div className="group relative inline-flex items-center px-3 py-1 border border-dashed border-gray-300 rounded text-xs">
+              <button
+                onClick={handleDismissTrackPositions}
+                className="absolute -top-1.5 -right-1.5 p-0.5 text-white bg-gray-300 hover:bg-gray-400 rounded-full transition-colors opacity-0 group-hover:opacity-100"
+                title="Dismiss"
+              >
+                <X className="w-2 h-2" />
+              </button>
+              <button
+                onClick={handleAddPosition}
+                className="text-gray-500 hover:text-gray-700 transition-colors font-medium"
+              >
+                + Add positions
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Editor Section */}
@@ -492,7 +721,7 @@ export default function NotePage({ params }: PageProps) {
               <button
                 onClick={handleDelete}
                 disabled={isDeleting}
-                className="px-4 py-2 text-sm text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50"
+                className="px-4 py-2 text-sm text-white bg-[#8b7964] rounded-lg hover:bg-[#6f624f] transition-colors disabled:opacity-50"
               >
                 {isDeleting ? 'Deleting...' : 'Delete'}
               </button>
@@ -512,6 +741,38 @@ export default function NotePage({ params }: PageProps) {
 
       {/* Assessment Modal */}
       <AssessmentModal />
+
+      {/* Position Form Modal */}
+      {showPositionForm && editingPosition && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg max-w-2xl w-full max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between p-6 border-b border-gray-200">
+              <h2 className="text-xl font-semibold text-gray-900">
+                {editingPosition.ticker ? 'Edit Position' : 'Add Position'}
+              </h2>
+              <button
+                onClick={() => {
+                  setShowPositionForm(false)
+                  setEditingPosition(null)
+                }}
+                className="p-1 hover:bg-gray-100 rounded transition-colors"
+              >
+                <X className="w-5 h-5 text-gray-500" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-6">
+              <PositionForm
+                position={editingPosition}
+                onSave={handleSavePosition}
+                onCancel={() => {
+                  setShowPositionForm(false)
+                  setEditingPosition(null)
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </>
   )
 }

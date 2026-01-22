@@ -1670,7 +1670,7 @@ export default function DashboardLayout({
                 </button>
                 <button
                   onClick={() => handleDeleteNote(showDeleteConfirm)}
-                  className="px-4 py-2 text-sm text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors"
+                  className="px-4 py-2 text-sm text-white bg-[#8b7964] rounded-lg hover:bg-[#6f624f] transition-colors"
                 >
                   Delete
                 </button>
@@ -1696,7 +1696,7 @@ export default function DashboardLayout({
                 </button>
                 <button
                   onClick={confirmDeleteNote}
-                  className="px-4 py-2 text-sm text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors"
+                  className="px-4 py-2 text-sm text-white bg-[#8b7964] rounded-lg hover:bg-[#6f624f] transition-colors"
                 >
                   Delete
                 </button>
