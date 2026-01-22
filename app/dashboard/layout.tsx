@@ -239,22 +239,20 @@ export default function DashboardLayout({
 
     setUserEmail(user.email || '')
 
-    // Try to get user's name from metadata
-    const fullName = user.user_metadata?.full_name || user.user_metadata?.name || ''
+    // Fetch user's name from profiles table
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('first_name, last_name')
+      .eq('id', user.id)
+      .single()
 
-    if (fullName) {
-      // Extract initials from full name
-      const nameParts = fullName.trim().split(/\s+/)
-      if (nameParts.length >= 2) {
-        // First and last name
-        const firstInitial = nameParts[0][0]?.toUpperCase() || ''
-        const lastInitial = nameParts[nameParts.length - 1][0]?.toUpperCase() || ''
-        setUserInitials(firstInitial + lastInitial)
-      } else if (nameParts.length === 1) {
-        // Single name - use first two letters or just first letter
-        const name = nameParts[0]
-        setUserInitials(name.substring(0, 2).toUpperCase())
-      }
+    if (profile && profile.first_name && profile.last_name) {
+      const firstInitial = profile.first_name[0]?.toUpperCase() || ''
+      const lastInitial = profile.last_name[0]?.toUpperCase() || ''
+      setUserInitials(firstInitial + lastInitial)
+    } else if (profile && profile.first_name) {
+      // Only first name available
+      setUserInitials(profile.first_name.substring(0, 2).toUpperCase())
     }
   }
 
